@@ -11,7 +11,7 @@ train_source_model = 'uniform'
 infer_source_model = 'uniform'
 max_k_train = False
 x_lambda = 10
-x_min_max = [1 / 32768, 1]
+x_min_max = [1 / 100, 1]
 
 # Display Configurations
 print_train_progress = True
@@ -68,7 +68,7 @@ def initialize_nn(m, n, layers, lr):
     # MSE
     mse = tf.losses.mean_squared_error(x, x_est)
     add = tf.reduce_mean(tf.nn.relu(x - x_est))
-    t = 10.0
+    t = 2.0
     loss = mse + t*add
 
     # Optimizer
@@ -102,26 +102,30 @@ def train_nn(sess, nn_arch, max_epochs, A, k, n, log_idx, mini_batch):
 
 def infer_nn_stats(sess, nn_arch, d_max, n, A, test_batch):
     # Performance Stats (Inference)
-    eps = 10**-6
+    eps = 0.5*10**-2
     perf_dict = {}
-    for d in range(1, d_max):
+    for d in range(1, d_max+1):
         x_test, y_test = get_batch_data(test_batch, d, n, infer_source_model, A)
         [x_estimate] = sess.run([nn_arch['x_est']],
                                 feed_dict={nn_arch['x']: x_test,
                                            nn_arch['y']: y_test})
-        x_estimate_clustered = np.zeros(x_estimate.shape)
-        for i in range(test_batch):
-            clusters, centroids = kmeans1d.cluster(x_estimate[i], 2)
-            x_estimate_clustered[i] = x_estimate[i] * np.array(clusters)
+        print(x_test)
+        print(x_estimate)
+        # x_estimate_clustered = np.zeros(x_estimate.shape)
+        # for i in range(test_batch):
+        #     clusters, centroids = kmeans1d.cluster(x_estimate[i], 2)
+        #     x_estimate_clustered[i] = x_estimate[i] * np.array(clusters)f
 
         y_true = np.where(x_test > eps, 1, 0).ravel()
-        y_pred = np.where(x_estimate_clustered > eps, 1, 0).ravel()
+        y_pred = np.where(x_estimate > eps, 1, 0).ravel()
 
         tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
         precision = tp / (tp + fp)
         recall = tp / (tp + fn)
         specificity = tn / (tn + fp)
 
+        # mask = np.logical_and(x_test > eps, np.logical_not(x_estimate > eps))
+        # mk = np.where(mask == True)
         perf_dict[d] = [precision, recall, specificity]
 
     return perf_dict
@@ -197,8 +201,16 @@ def print_sensing_matrix(s_mat):
 
 def jsr_pipeline(max_epochs, tr_batch, test_batch, m, n, k, A, log_idx, d_max, layers, disp_batch, lr):
     nn_arch = initialize_nn(m, n, layers, lr)
-
-    with tf.Session(config=tf.ConfigProto(intra_op_parallelism_threads=1)) as sess:
+    num_cores = 1
+    num_CPU = 1
+    num_GPU = 0
+    config = tf.ConfigProto(intra_op_parallelism_threads=num_cores,
+                            inter_op_parallelism_threads=num_cores,
+                            allow_soft_placement=True,
+                            device_count={'CPU': num_CPU,
+                                          'GPU': num_GPU}
+                            )
+    with tf.Session(config=config) as sess:
         init = tf.global_variables_initializer()
         sess.run(init)
 
