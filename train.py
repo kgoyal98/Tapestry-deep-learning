@@ -2,7 +2,7 @@ import kmeans1d
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, roc_curve, roc_auc_score
 import os
 import random
 
@@ -16,7 +16,7 @@ x_min_max = [1 / 100, 1]
 # Display Configurations
 print_train_progress = True
 print_stats = True
-plot_the_summary = True
+plot_the_summary = False
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
@@ -57,6 +57,8 @@ def initialize_nn(m, n, layers, lr):
     x = tf.placeholder(dtype=tf.float32, shape=[None, n], name='x')
     y = tf.placeholder(dtype=tf.float32, shape=[None, m], name='y')
 
+    labels = tf.cast(tf.math.greater(x, 0), tf.float32)
+
     fc = tf.contrib.layers.fully_connected
     dropout = tf.contrib.layers.dropout
     y1 = y
@@ -66,9 +68,11 @@ def initialize_nn(m, n, layers, lr):
     x_est = tf.nn.relu(dropout(fc(y1, n), 1.0))
 
     # MSE
-    mse = tf.losses.mean_squared_error(x, x_est)
+    mse = tf.losses.mean_squared_error(labels, x_est)
+    cross_entropy_loss = -tf.reduce_mean(tf.multiply(labels, tf.math.log(0.0001+x_est)) +
+                                         tf.multiply(1.0 - labels, tf.math.log(0.0001+1.0-x_est)))
     add = tf.reduce_mean(tf.nn.relu(x - x_est))
-    t = 2.0
+    t = 0.0
     loss = mse + t*add
 
     # Optimizer
@@ -109,24 +113,16 @@ def infer_nn_stats(sess, nn_arch, d_max, n, A, test_batch):
         [x_estimate] = sess.run([nn_arch['x_est']],
                                 feed_dict={nn_arch['x']: x_test,
                                            nn_arch['y']: y_test})
-        print(x_test)
-        print(x_estimate)
-        # x_estimate_clustered = np.zeros(x_estimate.shape)
-        # for i in range(test_batch):
-        #     clusters, centroids = kmeans1d.cluster(x_estimate[i], 2)
-        #     x_estimate_clustered[i] = x_estimate[i] * np.array(clusters)f
-
         y_true = np.where(x_test > eps, 1, 0).ravel()
-        y_pred = np.where(x_estimate > eps, 1, 0).ravel()
+        y_pred = np.where(x_estimate > 0.5, 1, 0).ravel()
 
         tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
         precision = tp / (tp + fp)
         recall = tp / (tp + fn)
         specificity = tn / (tn + fp)
+        auc = roc_auc_score(y_true, x_estimate.ravel())
 
-        # mask = np.logical_and(x_test > eps, np.logical_not(x_estimate > eps))
-        # mk = np.where(mask == True)
-        perf_dict[d] = [precision, recall, specificity]
+        perf_dict[d] = [precision, recall, specificity, auc]
 
     return perf_dict
 
@@ -225,25 +221,25 @@ def jsr_pipeline(max_epochs, tr_batch, test_batch, m, n, k, A, log_idx, d_max, l
         key_list = list(infer_stats.keys())
         key_list.sort()
         print("\n****************************************************************************")
-        print("Sparsity\tPrecision\tRecall (Sensitivity)\tSpecificity")
+        print("Sparsity\tPrecision\tRecall (Sensitivity)\tSpecificity\tAUC")
         for key in key_list:
-            print('\t%d\t\t%.4f\t\t\t%.4f\t\t\t\t%.4f' % (key, *[round(val, 4) for val in infer_stats[key]]))
+            print('\t%d\t\t%.4f\t\t\t%.4f\t\t\t\t%.4f\t\t\t\t%.4f' % (key, *[round(val, 4) for val in infer_stats[key]]))
 
 
 if __name__ == "__main__":
     num_items = 105
-    max_tr_sparsity = 6
+    max_tr_sparsity = 10
     num_tests = 45
     # For N-layered decoder network, we will have len(decoder_hidden_layers) = N-1
     decoder_hidden_layers = [105, 70]
     learn_rate = 0.001
     mini_batch_size = 4096
-    max_num_epochs = 9000
+    max_num_epochs = 18000
     log_index = 500
     test_batch_size = 1000
     display_batch_size = 5
     sigma = 0.1
-    d_max_stats = 12
+    d_max_stats = 20
     A = np.loadtxt("./optimized_M_45_285_kirkman.txt", dtype='i', delimiter=' ')
     A = A[:, :105]
     seed = 123
