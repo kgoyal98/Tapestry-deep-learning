@@ -11,7 +11,7 @@ train_source_model = 'uniform'
 infer_source_model = 'uniform'
 max_k_train = False
 x_lambda = 10
-x_min_max = [1 / 100, 1]
+x_min_max = [1 / 32768, 1]
 
 # Display Configurations
 print_train_progress = True
@@ -63,17 +63,16 @@ def initialize_nn(m, n, layers, lr):
     dropout = tf.contrib.layers.dropout
     y1 = y
     for layer in layers:
-        y1 = tf.nn.relu(dropout(fc(y1, layer), 1.0))
+        y1 = dropout(fc(y1, layer), 1.0)
 
-    x_est = tf.nn.relu(dropout(fc(y1, n), 1.0))
+    x_est = dropout(fc(y1, n, activation_fn=tf.keras.activations.linear), 1.0)
 
     # MSE
     mse = tf.losses.mean_squared_error(labels, x_est)
-    cross_entropy_loss = -tf.reduce_mean(tf.multiply(labels, tf.math.log(0.0001+x_est)) +
-                                         tf.multiply(1.0 - labels, tf.math.log(0.0001+1.0-x_est)))
+    cross_entropy_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=x_est))
     add = tf.reduce_mean(tf.nn.relu(x - x_est))
     t = 0.0
-    loss = mse + t*add
+    loss = cross_entropy_loss + t*add
 
     # Optimizer
     optimiser = tf.train.AdamOptimizer(
@@ -106,7 +105,7 @@ def train_nn(sess, nn_arch, max_epochs, A, k, n, log_idx, mini_batch):
 
 def infer_nn_stats(sess, nn_arch, d_max, n, A, test_batch):
     # Performance Stats (Inference)
-    eps = 0.5*10**-2
+    eps = 10**-5
     perf_dict = {}
     for d in range(1, d_max+1):
         x_test, y_test = get_batch_data(test_batch, d, n, infer_source_model, A)
@@ -231,12 +230,12 @@ if __name__ == "__main__":
     max_tr_sparsity = 10
     num_tests = 45
     # For N-layered decoder network, we will have len(decoder_hidden_layers) = N-1
-    decoder_hidden_layers = [105, 70]
+    decoder_hidden_layers = [105, 105]
     learn_rate = 0.001
-    mini_batch_size = 4096
-    max_num_epochs = 18000
-    log_index = 500
-    test_batch_size = 1000
+    mini_batch_size = 128
+    max_num_epochs = 20000
+    log_index = 1000
+    test_batch_size = 128
     display_batch_size = 5
     sigma = 0.1
     d_max_stats = 20
