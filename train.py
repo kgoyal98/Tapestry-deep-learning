@@ -67,7 +67,7 @@ def initialize_nn(m, n, layers, lr):
 
     x_est = dropout(fc(y1, n, activation_fn=tf.keras.activations.linear), 1.0)
 
-    # MSE
+    # Loss
     mse = tf.losses.mean_squared_error(labels, x_est)
     cross_entropy_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=x_est))
     add = tf.reduce_mean(tf.nn.relu(x - x_est))
@@ -228,7 +228,7 @@ def jsr_pipeline(max_epochs, tr_batch, test_batch, m, n, k, A, log_idx, d_max, l
 
 if __name__ == "__main__":
     num_items = 105
-    max_tr_sparsity = 10
+    max_tr_sparsity = 5
     num_tests = 45
     # For N-layered decoder network, we will have len(decoder_hidden_layers) = N-1
     decoder_hidden_layers = [105, 105]
@@ -240,7 +240,7 @@ if __name__ == "__main__":
 
     display_batch_size = 5
     sigma = 0.1
-    d_max_stats = 20
+    d_max_stats = 5
     A = np.loadtxt("./optimized_M_45_285_kirkman.txt", dtype='i', delimiter=' ')
     A = A[:, :105]
     seed = 123
