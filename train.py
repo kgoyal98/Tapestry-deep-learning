@@ -1,10 +1,10 @@
-import kmeans1d
-import numpy as np
-import tensorflow as tf
-import matplotlib.pyplot as plt
-from sklearn.metrics import confusion_matrix, roc_curve, roc_auc_score
 import os
 import random
+
+import matplotlib.pyplot as plt
+import numpy as np
+import tensorflow as tf
+from sklearn.metrics import confusion_matrix, roc_auc_score
 
 # Source Configurations
 train_source_model = 'uniform'
@@ -63,7 +63,7 @@ def initialize_nn(m, n, layers, lr):
     dropout = tf.contrib.layers.dropout
     y1 = y
     for layer in layers:
-        y1 = dropout(fc(y1, layer), 1.0)
+        y1 = dropout(fc(y1, layer, activation_fn=tf.nn.relu), 1.0)
 
     x_est = dropout(fc(y1, n, activation_fn=tf.keras.activations.linear), 1.0)
 
@@ -72,7 +72,7 @@ def initialize_nn(m, n, layers, lr):
     cross_entropy_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=x_est))
     add = tf.reduce_mean(tf.nn.relu(x - x_est))
     t = 0.0
-    loss = cross_entropy_loss + t*add
+    loss = cross_entropy_loss + t * add
 
     # Optimizer
     optimiser = tf.train.AdamOptimizer(
@@ -105,9 +105,9 @@ def train_nn(sess, nn_arch, max_epochs, A, k, n, log_idx, mini_batch):
 
 def infer_nn_stats(sess, nn_arch, d_max, n, A, test_batch):
     # Performance Stats (Inference)
-    eps = 10**-5
+    eps = 10 ** -5
     perf_dict = {}
-    for d in range(1, d_max+1):
+    for d in range(1, d_max + 1):
         x_test, y_test = get_batch_data(test_batch, d, n, infer_source_model, A)
         [x_estimate] = sess.run([nn_arch['x_est']],
                                 feed_dict={nn_arch['x']: x_test,
@@ -132,12 +132,12 @@ def infer_nn_estimate(sess, nn_arch, k, n, test_batch):
     [x_estimate] = sess.run([nn_arch['x_est']],
                             feed_dict={nn_arch['x']: x_test,
                                        nn_arch['y']: y_test})
-    x_estimate_clustered = np.zeros(x_estimate.shape)
-    for i in range(test_batch):
-        clusters, centroids = kmeans1d.cluster(x_estimate[i], 2)
-        x_estimate_clustered[i] = x_estimate[i] * np.array(clusters)
+    # x_estimate_clustered = np.zeros(x_estimate.shape)
+    # for i in range(test_batch):
+    #     clusters, centroids = kmeans1d.cluster(x_estimate[i], 2)
+    #     x_estimate_clustered[i] = x_estimate[i] * np.array(clusters)
 
-    infer_results = {'x_test': x_test, 'x_estimate': x_estimate, 'x_estimate_clustered': x_estimate_clustered}
+    infer_results = {'x_test': x_test, 'x_estimate': x_estimate, 'x_estimate_clustered': x_estimate}
     return infer_results
 
 
@@ -176,7 +176,7 @@ def plot_summary(tr_results, inf_results, display_batch):
 
 
 def save_learnt_sensing_mat(sess, nn_arch, beta_inf):
-    s_matrix = np.transpose(sess.run(nn_arch['A'], feed_dict = {nn_arch['beta_factor']: [[beta_inf]]}))
+    s_matrix = np.transpose(sess.run(nn_arch['A'], feed_dict={nn_arch['beta_factor']: [[beta_inf]]}))
     min_col = min(sum(s_matrix, 0))
     min_row = min(sum(s_matrix, 1))
     print('Verify if min counts are > 0: min_col_count: ', min_col, '\tmin_row_count: ', min_row)
@@ -222,7 +222,8 @@ def jsr_pipeline(max_epochs, tr_batch, test_batch, m, n, k, A, log_idx, d_max, l
         print("\n****************************************************************************")
         print("Sparsity\tPrecision\tRecall (Sensitivity)\tSpecificity\tAUC")
         for key in key_list:
-            print('\t%d\t\t%.4f\t\t\t%.4f\t\t\t\t%.4f\t\t\t\t%.4f' % (key, *[round(val, 4) for val in infer_stats[key]]))
+            print(
+                '\t%d\t\t%.4f\t\t\t%.4f\t\t\t\t%.4f\t\t\t\t%.4f' % (key, *[round(val, 4) for val in infer_stats[key]]))
 
 
 if __name__ == "__main__":
@@ -233,9 +234,10 @@ if __name__ == "__main__":
     decoder_hidden_layers = [105, 105]
     learn_rate = 0.001
     mini_batch_size = 128
-    max_num_epochs = 20000
-    log_index = 1000
-    test_batch_size = 128
+    max_num_epochs = 100000
+    log_index = 5000
+    test_batch_size = 4096
+
     display_batch_size = 5
     sigma = 0.1
     d_max_stats = 20
