@@ -69,7 +69,7 @@ def initialize_nn(m, n, layers, lr):
 
     # Loss
     mse = tf.losses.mean_squared_error(labels, x_est)
-    cross_entropy_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=x_est))
+    cross_entropy_loss = tf.reduce_mean(tf.nn.weighted_cross_entropy_with_logits(labels=labels, logits=x_est, pos_weight=6))
     add = tf.reduce_mean(tf.nn.relu(x - x_est))
     t = 0.0
     loss = cross_entropy_loss + t * add
@@ -114,7 +114,6 @@ def infer_nn_stats(sess, nn_arch, d_max, n, A, test_batch):
                                            nn_arch['y']: y_test})
         y_true = np.where(x_test > eps, 1, 0).ravel()
         y_pred = np.where(x_estimate > 0.5, 1, 0).ravel()
-
         tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
         precision = tp / (tp + fp)
         recall = tp / (tp + fn)
@@ -223,12 +222,12 @@ def jsr_pipeline(max_epochs, tr_batch, test_batch, m, n, k, A, log_idx, d_max, l
         print("Sparsity\tPrecision\tRecall (Sensitivity)\tSpecificity\tAUC")
         for key in key_list:
             print(
-                '\t%d\t\t%.4f\t\t\t%.4f\t\t\t\t%.4f\t\t\t\t%.4f' % (key, *[round(val, 4) for val in infer_stats[key]]))
+                '\t%d\t\t%.4f\t\t%.4f\t\t%.4f\t\t%.4f' % (key, *[round(val, 4) for val in infer_stats[key]]))
 
 
 if __name__ == "__main__":
     num_items = 105
-    max_tr_sparsity = 5
+    max_tr_sparsity = 10
     num_tests = 45
     # For N-layered decoder network, we will have len(decoder_hidden_layers) = N-1
     decoder_hidden_layers = [105, 105]
@@ -240,7 +239,7 @@ if __name__ == "__main__":
 
     display_batch_size = 5
     sigma = 0.1
-    d_max_stats = 5
+    d_max_stats = max_tr_sparsity
     A = np.loadtxt("./optimized_M_45_285_kirkman.txt", dtype='i', delimiter=' ')
     A = A[:, :105]
     seed = 123
