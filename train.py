@@ -1,5 +1,8 @@
+import json
+import logging
 import os
 import random
+from argparse import ArgumentParser
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -21,10 +24,16 @@ plot_the_summary = False
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 
+def comp(Y, A):
+    return ((Y == 0.0)@A == 0).astype(float)
+
+
 def get_batch_data(mini_batch, k, n, source, A, **kwargs):
     # TODO: kwargs will contain above config params
     x = np.zeros((mini_batch, n))
     idx = list(range(mini_batch))
+    if k == 'uniform':
+        k = np.random.randint(0, 10+1)
     for i in range(k):
         positions = np.random.choice(np.arange(n), mini_batch)
         if source == 'poisson':
@@ -34,7 +43,8 @@ def get_batch_data(mini_batch, k, n, source, A, **kwargs):
         else:
             raise Exception("Unsupported source")
     y = np.matmul(x, np.transpose(A))
-    return x, y
+    x_comp = comp(y, A)
+    return x, y, x_comp
 
 
 # def get_mini_batch(mini_batch, k, n, source, A):
@@ -56,12 +66,13 @@ def initialize_nn(m, n, layers, lr):
     # Input and Output
     x = tf.placeholder(dtype=tf.float32, shape=[None, n], name='x')
     y = tf.placeholder(dtype=tf.float32, shape=[None, m], name='y')
+    x_comp = tf.placeholder(dtype=tf.float32, shape=[None, n], name='x_comp')
 
     labels = tf.cast(tf.math.greater(x, 0), tf.float32)
 
     fc = tf.contrib.layers.fully_connected
     dropout = tf.contrib.layers.dropout
-    y1 = y
+    y1 = tf.concat([y, x_comp], axis=1)
     for layer in layers:
         y1 = dropout(fc(y1, layer, activation_fn=tf.nn.relu), 1.0)
 
@@ -69,7 +80,7 @@ def initialize_nn(m, n, layers, lr):
 
     # Loss
     mse = tf.losses.mean_squared_error(labels, x_est)
-    cross_entropy_loss = tf.reduce_mean(tf.nn.weighted_cross_entropy_with_logits(labels=labels, logits=x_est, pos_weight=6))
+    cross_entropy_loss = tf.reduce_mean(tf.nn.weighted_cross_entropy_with_logits(labels=labels, logits=x_est, pos_weight=4))
     add = tf.reduce_mean(tf.nn.relu(x - x_est))
     t = 0.0
     loss = cross_entropy_loss + t * add
@@ -79,7 +90,7 @@ def initialize_nn(m, n, layers, lr):
         # learning_rate=lr
     ).minimize(loss)
 
-    nn_arch = {'x': x, 'y': y, 'optimiser': optimiser, 'loss': loss, 'mse': mse, 'add': add, 'x_est': x_est}
+    nn_arch = {'x': x, 'y': y, 'optimiser': optimiser, 'loss': loss, 'mse': mse, 'add': add, 'x_est': x_est, 'x_comp': x_comp}
 
     return nn_arch
 
@@ -89,14 +100,15 @@ def train_nn(sess, nn_arch, max_epochs, A, k, n, log_idx, mini_batch):
     # writer = tf.summary.FileWriter('./graphs', sess.graph) # Writes graph to tensorboard
 
     for epoch in range(max_epochs):
-        x_batch, y_batch = get_batch_data(mini_batch, k, n, train_source_model, A)
+        x_batch, y_batch, x_comp = get_batch_data(mini_batch, k, n, train_source_model, A)
 
         _, loss, mse, add = sess.run([nn_arch['optimiser'], nn_arch['loss'], nn_arch['mse'], nn_arch['add']],
                                      feed_dict={nn_arch['x']: x_batch,
-                                                nn_arch['y']: y_batch})
+                                                nn_arch['y']: y_batch,
+                                                nn_arch['x_comp']: x_comp})
         if epoch % log_idx == 0:
             if print_train_progress:
-                print(f'epoch: {epoch},\tloss: {loss},\tmse: {mse},\tadd: {add}')
+                logging.info(f'epoch: {epoch},\tloss: {loss},\tmse: {mse},\tadd: {add}')
             losses.append([epoch, loss])
 
     train_results = {'losses': losses}
@@ -108,10 +120,11 @@ def infer_nn_stats(sess, nn_arch, d_max, n, A, test_batch):
     eps = 10 ** -5
     perf_dict = {}
     for d in range(1, d_max + 1):
-        x_test, y_test = get_batch_data(test_batch, d, n, infer_source_model, A)
+        x_test, y_test, x_comp = get_batch_data(test_batch, d, n, infer_source_model, A)
         [x_estimate] = sess.run([nn_arch['x_est']],
                                 feed_dict={nn_arch['x']: x_test,
-                                           nn_arch['y']: y_test})
+                                           nn_arch['y']: y_test,
+                                           nn_arch['x_comp']: x_comp})
         y_true = np.where(x_test > eps, 1, 0).ravel()
         y_pred = np.where(x_estimate > 0.5, 1, 0).ravel()
         tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
@@ -127,10 +140,11 @@ def infer_nn_stats(sess, nn_arch, d_max, n, A, test_batch):
 
 def infer_nn_estimate(sess, nn_arch, k, n, test_batch):
     # Estimation (Inference)
-    x_test, y_test = get_batch_data(test_batch, k, n, infer_source_model, A)
+    x_test, y_test, x_comp = get_batch_data(test_batch, k, n, infer_source_model, A)
     [x_estimate] = sess.run([nn_arch['x_est']],
                             feed_dict={nn_arch['x']: x_test,
-                                       nn_arch['y']: y_test})
+                                       nn_arch['y']: y_test,
+                                       nn_arch['x_comp']: x_comp})
     # x_estimate_clustered = np.zeros(x_estimate.shape)
     # for i in range(test_batch):
     #     clusters, centroids = kmeans1d.cluster(x_estimate[i], 2)
@@ -218,37 +232,50 @@ def jsr_pipeline(max_epochs, tr_batch, test_batch, m, n, k, A, log_idx, d_max, l
     if print_stats:
         key_list = list(infer_stats.keys())
         key_list.sort()
-        print("\n****************************************************************************")
-        print("Sparsity\tPrecision\tRecall (Sensitivity)\tSpecificity\tAUC")
+        logging.info("Sparsity\tPrecision\tRecall (Sensitivity)\tSpecificity\tAUC")
         for key in key_list:
-            print(
-                '\t%d\t\t%.4f\t\t%.4f\t\t%.4f\t\t%.4f' % (key, *[round(val, 4) for val in infer_stats[key]]))
+            logging.info('\t%d\t\t%.4f\t\t%.4f\t\t%.4f\t\t%.4f' % (key, *[round(val, 4) for val in infer_stats[key]]))
 
 
 if __name__ == "__main__":
+    params = {}
+    ap = ArgumentParser()
+    # ap.add_argument("--data_path", type=str, default="./data/squad/squad.pkl")
+    ap.add_argument("--logfile", type=str, default="./logs/tapestry.log")
+    ap.add_argument("--epochs", type=int, default=50000)
+    ap.add_argument("--sparsity", type=int, default=10)
+    ap.add_argument("--seed", type=int, default=123)
+    av = ap.parse_args()
+
+    params.update(vars(av))
     num_items = 105
-    max_tr_sparsity = 10
     num_tests = 45
+    sparsity = av.sparsity
     # For N-layered decoder network, we will have len(decoder_hidden_layers) = N-1
     decoder_hidden_layers = [105, 105]
     learn_rate = 0.001
-    mini_batch_size = 128
-    max_num_epochs = 100000
-    log_index = 5000
+    mini_batch_size = 1024
+    max_num_epochs = av.epochs
+    log_index = 1000
     test_batch_size = 4096
 
     display_batch_size = 5
     sigma = 0.1
-    d_max_stats = max_tr_sparsity
+    d_max_stats = 20
     A = np.loadtxt("./optimized_M_45_285_kirkman.txt", dtype='i', delimiter=' ')
     A = A[:, :105]
-    seed = 123
+    seed = av.seed
+
     tf.set_random_seed(seed)
     random.seed(seed)
     np.random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
 
+    logger = logging.getLogger('logger')
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s', filename=av.logfile,
+                        filemode='a')
+    logging.info(f'training code for the params:\n{json.dumps(params, indent=4)}')
     jsr_pipeline(max_num_epochs, mini_batch_size, test_batch_size,
-                 num_tests, num_items, max_tr_sparsity, A, log_index,
+                 num_tests, num_items, sparsity, A, log_index,
                  d_max_stats, decoder_hidden_layers,
                  display_batch_size, learn_rate)
