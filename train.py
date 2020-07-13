@@ -31,17 +31,16 @@ def comp(Y, A):
 def get_batch_data(mini_batch, k, n, source, A, **kwargs):
     # TODO: kwargs will contain above config params
     x = np.zeros((mini_batch, n))
-    idx = list(range(mini_batch))
-    if k == 'uniform':
-        k = np.random.randint(0, 10+1)
-    for i in range(k):
-        positions = np.random.choice(np.arange(n), mini_batch)
+    for i in range(n):
+        sparsity = np.random.randint(0, k+1)
+        positions = np.random.choice(np.arange(n), sparsity, replace=False)
         if source == 'poisson':
-            x[idx, positions] = np.random.poisson(x_lambda, mini_batch)
+            x[i, positions] = np.random.poisson(x_lambda, sparsity)
         elif source == 'uniform':
-            x[idx, positions] = np.random.uniform(x_min_max[0], x_min_max[1], mini_batch)
+            x[i, positions] = np.random.uniform(x_min_max[0], x_min_max[1], sparsity)
         else:
             raise Exception("Unsupported source")
+
     y = np.matmul(x, np.transpose(A))
     x_comp = comp(y, A)
     return x, y, x_comp
