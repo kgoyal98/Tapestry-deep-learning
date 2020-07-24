@@ -8,13 +8,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 from sklearn.metrics import confusion_matrix, roc_auc_score
+from sklearn import preprocessing
 
 # Source Configurations
 train_source_model = 'uniform'
 infer_source_model = 'uniform'
 max_k_train = False
 x_lambda = 10
-x_min_max = [1 / 32768, 1]
+x_min_max = [1, 32768]
 
 # Display Configurations
 print_train_progress = True
@@ -29,7 +30,6 @@ def comp(Y, A):
 
 
 def get_batch_data(mini_batch, k, n, source, A, **kwargs):
-    # TODO: kwargs will contain above config params
     x = np.zeros((mini_batch, n))
     for i in range(n):
         sparsity = np.random.randint(0, k+1)
@@ -41,21 +41,35 @@ def get_batch_data(mini_batch, k, n, source, A, **kwargs):
         else:
             raise Exception("Unsupported source")
 
-    y = np.matmul(x, np.transpose(A))
+    eps = 10**-10
+    y = np.matmul(x, np.transpose(A / np.sum(A, 1, keepdims=True)))
+    y = (40 - np.log(y + eps))
+    y += np.random.normal(0, 0.1, y.shape)
+    y /= 50
+    x /= 32768
     x_comp = comp(y, A)
     return x, y, x_comp
 
 
-# def get_mini_batch(mini_batch, k, n, source, A):
-#     if not max_k_train:
-#         x_batch = get_batch_data(mini_batch, k, n, source, A)
-#     else:
-#         x_batch = get_batch_data(mini_batch // k, 1, n, source, A)
-#         if k > 1:
-#             for d in range(2, k + 1):
-#                 x_batch = np.vstack((x_batch, get_batch_data(mini_batch // k, d, n, source, A)))
-#
-#     return x_batch
+def get_test_batch_data(mini_batch, k, n, source, A, **kwargs):
+    x = np.zeros((mini_batch, n))
+    idx = list(range(mini_batch))
+    for i in range(k):
+        positions = np.random.choice(np.arange(n), mini_batch)
+        if source == 'poisson':
+            x[idx, positions] = np.random.poisson(x_lambda, mini_batch)
+        elif source == 'uniform':
+            x[idx, positions] = np.random.uniform(x_min_max[0], x_min_max[1], mini_batch)
+        else:
+            raise Exception("Unsupported source")
+    eps = 10 ** -10
+    y = np.matmul(x, np.transpose(A / np.sum(A, 1, keepdims=True)))
+    y = (40 - np.log(y + eps))
+    y += np.random.normal(0, 0.1, y.shape)
+    y /= 50
+    x /= 32768
+    x_comp = comp(y, A)
+    return x, y, x_comp
 
 
 def initialize_nn(m, n, layers, lr):
@@ -79,15 +93,13 @@ def initialize_nn(m, n, layers, lr):
 
     # Loss
     mse = tf.losses.mean_squared_error(labels, x_est)
-    cross_entropy_loss = tf.reduce_mean(tf.nn.weighted_cross_entropy_with_logits(labels=labels, logits=x_est, pos_weight=4))
+    cross_entropy_loss = tf.reduce_mean(tf.nn.weighted_cross_entropy_with_logits(labels=labels, logits=x_est, pos_weight=10))
     add = tf.reduce_mean(tf.nn.relu(x - x_est))
     t = 0.0
     loss = cross_entropy_loss + t * add
 
     # Optimizer
-    optimiser = tf.train.AdamOptimizer(
-        # learning_rate=lr
-    ).minimize(loss)
+    optimiser = tf.train.AdamOptimizer(learning_rate=lr).minimize(loss)
 
     nn_arch = {'x': x, 'y': y, 'optimiser': optimiser, 'loss': loss, 'mse': mse, 'add': add, 'x_est': x_est, 'x_comp': x_comp}
 
@@ -118,28 +130,28 @@ def infer_nn_stats(sess, nn_arch, d_max, n, A, test_batch):
     # Performance Stats (Inference)
     eps = 10 ** -5
     perf_dict = {}
-    for d in range(1, d_max + 1):
-        x_test, y_test, x_comp = get_batch_data(test_batch, d, n, infer_source_model, A)
+    for d in range(0, d_max + 1):
+        x_test, y_test, x_comp = get_test_batch_data(test_batch, d, n, infer_source_model, A)
         [x_estimate] = sess.run([nn_arch['x_est']],
                                 feed_dict={nn_arch['x']: x_test,
                                            nn_arch['y']: y_test,
                                            nn_arch['x_comp']: x_comp})
         y_true = np.where(x_test > eps, 1, 0).ravel()
         y_pred = np.where(x_estimate > 0.5, 1, 0).ravel()
-        tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+        tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
         precision = tp / (tp + fp)
         recall = tp / (tp + fn)
         specificity = tn / (tn + fp)
-        auc = roc_auc_score(y_true, x_estimate.ravel())
+        # auc = roc_auc_score(y_true, x_estimate.ravel(), labels=[0, 1])
 
-        perf_dict[d] = [precision, recall, specificity, auc]
+        perf_dict[d] = [precision, recall, specificity]
 
     return perf_dict
 
 
 def infer_nn_estimate(sess, nn_arch, k, n, test_batch):
     # Estimation (Inference)
-    x_test, y_test, x_comp = get_batch_data(test_batch, k, n, infer_source_model, A)
+    x_test, y_test, x_comp = get_test_batch_data(test_batch, k, n, infer_source_model, A)
     [x_estimate] = sess.run([nn_arch['x_est']],
                             feed_dict={nn_arch['x']: x_test,
                                        nn_arch['y']: y_test,
@@ -231,9 +243,9 @@ def jsr_pipeline(max_epochs, tr_batch, test_batch, m, n, k, A, log_idx, d_max, l
     if print_stats:
         key_list = list(infer_stats.keys())
         key_list.sort()
-        logging.info("Sparsity\tPrecision\tRecall (Sensitivity)\tSpecificity\tAUC")
+        logging.info("Sparsity\tPrecision\tRecall\tSpecificity")
         for key in key_list:
-            logging.info('\t%d\t\t%.4f\t\t%.4f\t\t%.4f\t\t%.4f' % (key, *[round(val, 4) for val in infer_stats[key]]))
+            logging.info('\t%d\t\t%.4f\t\t%.4f\t\t%.4f' % (key, *[round(val, 4) for val in infer_stats[key]]))
 
 
 if __name__ == "__main__":
@@ -243,6 +255,7 @@ if __name__ == "__main__":
     ap.add_argument("--logfile", type=str, default="./logs/tapestry.log")
     ap.add_argument("--epochs", type=int, default=50000)
     ap.add_argument("--sparsity", type=int, default=10)
+    ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--seed", type=int, default=123)
     av = ap.parse_args()
 
@@ -251,9 +264,9 @@ if __name__ == "__main__":
     num_tests = 45
     sparsity = av.sparsity
     # For N-layered decoder network, we will have len(decoder_hidden_layers) = N-1
-    decoder_hidden_layers = [105, 105]
-    learn_rate = 0.001
-    mini_batch_size = 1024
+    decoder_hidden_layers = [150, 120, 120]
+    learn_rate = av.lr
+    mini_batch_size = 128
     max_num_epochs = av.epochs
     log_index = 1000
     test_batch_size = 4096
